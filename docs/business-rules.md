@@ -15,7 +15,7 @@ file and symbol it comes from, so you can check it there.
 - A *block* is a fixed-size page of KV cache (16 tokens by default). Prefix caching shares full blocks.
 - *Prefill* is computing the prompt. *Decode* is generating output one token at a time.
 - *Preemption* means taking a running request off the GPU and putting it back in the waiting queue.
-- File paths are relative to the `vllm/` package folder.
+- File paths are relative to the repo's `vllm/` package folder, so `v1/request.py` means `vllm/v1/request.py`.
 
 ---
 
@@ -129,13 +129,14 @@ in the context, the request value (or the model's default), any server override,
 
 *Source: `sampling_params.py` (`SamplingParams._verify_args`).*
 
-**P3. Temperature 0 means greedy.** Below `1e-5` the request is greedy: `top_p`, `top_k` and `min_p`
-are reset to off, and `n` must be 1. Negative temperature is rejected.
+**P3. Temperature 0 means greedy.** Only exactly 0 is greedy, because small positive values are raised
+first (P4). A greedy request has `top_p`, `top_k` and `min_p` reset to off, and `n` must be 1.
+Negative temperature is rejected.
 
 *Source: `sampling_params.py` (`SamplingParams.__post_init__`, `_verify_greedy_sampling`, `sampling_type`).*
 
 **P4. Very small temperatures are raised to 0.01.** A value between 0 and 0.01 is bumped to 0.01 with a
-warning, to avoid NaN or inf in the maths.
+warning, to avoid NaN or inf in the maths. The request then samples randomly, not greedily.
 
 *Source: `sampling_params.py` (`SamplingParams.__post_init__`, `_MAX_TEMP`).*
 
@@ -173,8 +174,8 @@ with and without a leading space, so both forms are banned.
 
 *Source: `sampling_params.py` (`SamplingParams.update_from_tokenizer`).*
 
-**P12. Speculative decoding does not support `min_p` or `logit_bias`.** A request with either is rejected
-when a speculative config is active.
+**P12. Speculative decoding does not support `min_p` or `logit_bias`.** When a speculative config is active,
+a request with `min_p` above `1e-5` or any `logit_bias` is rejected.
 
 *Source: `sampling_params.py` (`SamplingParams._validate_spec_decode`).*
 
@@ -422,7 +423,8 @@ the constraint applies. `enable_in_reasoning=True` constrains the reasoning too.
 
 ## 8. LoRA adapters (L)
 
-**L1. A LoRA ID must be 1 or more, and the path cannot be empty.** The ID must be unique per adapter.
+**L1. A LoRA ID must be 1 or more, and the path cannot be empty.** The ID is meant to be unique per
+adapter, but the code says this is not enforced.
 
 *Source: `lora/request.py` (`LoRARequest.__post_init__`).*
 
@@ -507,9 +509,10 @@ then `plugin`. An unsupported task is rejected.
 
 *Source: `v1/engine/input_processor.py` (`InputProcessor._validate_params`).*
 
-**O2. Each task only accepts its own parameters.** Passing a parameter that the task does not use is an error.
+**O2. Each built-in task only accepts its own parameters.** Passing a parameter that the task does not use is
+an error. The `plugin` task skips this check and leaves validation to the plugin.
 
-*Source: `pooling_params.py` (`PoolingParams._verify_valid_parameters`).*
+*Source: `pooling_params.py` (`PoolingParams.verify`, `_verify_valid_parameters`).*
 
 **O3. Changing embedding size needs a Matryoshka model.** `dimensions` is rejected on other models,
 and must be in the model's list of dimensions if it has one.
@@ -523,7 +526,7 @@ and must be in the model's list of dimensions if it has one.
 **Scheduler** (`config/scheduler.py`, `SchedulerConfig`):
 
 | Setting | Default | Rule |
-|---|---|---|
+| --- | --- | --- |
 | `policy` | `fcfs` | `fcfs` or `priority` (C6, C9) |
 | `max_num_batched_tokens` | 2,048 (class default) | ≥ 1; must be ≥ `max_num_seqs` |
 | `max_num_seqs` | 128 (class default) | ≥ 1 |
@@ -538,7 +541,7 @@ and must be in the model's list of dimensions if it has one.
 **Real defaults set by `EngineArgs`** (`engine/arg_utils.py`, `EngineArgs.get_batch_defaults`):
 
 | Hardware | `max_num_batched_tokens` (LLM / API server) | `max_num_seqs` (LLM / API server) |
-|---|---|---|
+| --- | --- | --- |
 | GPU ≥ 70 GiB, not A100 | 16,384 / 8,192 | 1,024 / 1,024 |
 | Other GPUs | 8,192 / 2,048 | 256 / 256 |
 | CPU (× world size) | 4,096 / 2,048 | 256 / 128 |
@@ -546,7 +549,7 @@ and must be in the model's list of dimensions if it has one.
 **KV cache** (`config/cache.py`, `CacheConfig`):
 
 | Setting | Default | Rule |
-|---|---|---|
+| --- | --- | --- |
 | `block_size` | 16 | |
 | `gpu_memory_utilization` | 0.92 | > 0 and ≤ 1; per instance |
 | `kv_cache_memory_bytes` | unset | when set, `gpu_memory_utilization` is ignored |
@@ -558,7 +561,7 @@ and must be in the model's list of dimensions if it has one.
 **Model and sampling** (`config/model.py`, `ModelConfig`; `envs.py`):
 
 | Setting | Default | Rule |
-|---|---|---|
+| --- | --- | --- |
 | `max_model_len` | from model config | ≥ -1; -1 or `auto` = largest length that fits in GPU memory; above the model's limit needs `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1` |
 | fallback when the model config gives no length | 2,048 | used by `_get_and_verify_max_len` |
 | `max_logprobs` | 20 | -1 = no cap |
@@ -573,7 +576,7 @@ and must be in the model's list of dimensions if it has one.
 **LoRA** (`config/lora.py`, `LoRAConfig`):
 
 | Setting | Default | Rule |
-|---|---|---|
+| --- | --- | --- |
 | `max_lora_rank` | 16 | one of 1, 8, 16, 32, 64, 128, 256, 320, 512 |
 | `max_loras` | 1 | ≥ 1; adapters per batch |
 | `max_cpu_loras` | = `max_loras` | must be ≥ `max_loras` |
